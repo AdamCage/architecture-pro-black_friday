@@ -1,0 +1,86 @@
+@startuml
+' C4-PlantUML (Container level)
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_LEFT_RIGHT()
+SHOW_LEGEND()
+
+title "Mobile World — Final architecture (CDN + API Gateway + Consul + Redis + MongoDB sharding+replication)"
+
+Person(userEU,   "User (EU)")
+Person(userRU,   "User (RU)")
+Person(userASIA, "User (ASIA)")
+
+Container_Ext(cdn,    "CDN (multi-region)", "CDN", "Delivers static content close to users")
+Container(origin, "Static content origin (S3/Static server)", "S3/HTTP", "Source of static assets for CDN")
+
+Rel(userEU,   cdn, "static", "HTTPS")
+Rel(userRU,   cdn, "static", "HTTPS")
+Rel(userASIA, cdn, "static", "HTTPS")
+Rel(cdn, origin, "fetch static", "HTTP(S)")
+
+System_Boundary(sys, "Mobile World backend") {
+  Container(apigw,  "API Gateway (Nginx/Traefik)", "Nginx/Traefik", "Routes API traffic, load-balances across app instances")
+  Container(consul, "Consul (Service Discovery)", "Consul", "Service registry for dynamic backend instances")
+
+  Container(api1, "pymongo-api-1", "Python API", "Handles requests, uses cache and DB")
+  Container(api2, "pymongo-api-2", "Python API", "Handles requests, uses cache and DB")
+  Container(api3, "pymongo-api-3", "Python API", "Handles requests, uses cache and DB")
+
+  ContainerDb(redis, "redis (cache)", "Redis", "Caches reads for /<collection>/users")
+
+  Container_Boundary(mongo, "MongoDB cluster") {
+    Container(mongos, "mongos (router)", "MongoDB mongos", "Routes queries to shards")
+
+    Container_Boundary(configrs, "ReplicaSet: configReplSet") {
+      ContainerDb(cfg1, "configSrv1", "MongoDB config server", "Cluster metadata")
+      ContainerDb(cfg2, "configSrv2", "MongoDB config server", "Cluster metadata")
+      ContainerDb(cfg3, "configSrv3", "MongoDB config server", "Cluster metadata")
+    }
+
+    Container_Boundary(shard1rs, "ReplicaSet: shard1RS") {
+      ContainerDb(s11, "shard1-1 (primary)",   "MongoDB shard", "Shard1 primary")
+      ContainerDb(s12, "shard1-2 (secondary)", "MongoDB shard", "Shard1 secondary")
+      ContainerDb(s13, "shard1-3 (secondary)", "MongoDB shard", "Shard1 secondary")
+    }
+
+    Container_Boundary(shard2rs, "ReplicaSet: shard2RS") {
+      ContainerDb(s21, "shard2-1 (primary)",   "MongoDB shard", "Shard2 primary")
+      ContainerDb(s22, "shard2-2 (secondary)", "MongoDB shard", "Shard2 secondary")
+      ContainerDb(s23, "shard2-3 (secondary)", "MongoDB shard", "Shard2 secondary")
+    }
+  }
+}
+
+Rel(userEU,   apigw, "api", "HTTPS")
+Rel(userRU,   apigw, "api", "HTTPS")
+Rel(userASIA, apigw, "api", "HTTPS")
+
+Rel(apigw, consul, "discover", "HTTP")
+Rel(api1,  consul, "register", "HTTP")
+Rel(api2,  consul, "register", "HTTP")
+Rel(api3,  consul, "register", "HTTP")
+
+Rel(apigw, api1, "lb", "HTTP")
+Rel(apigw, api2, "lb", "HTTP")
+Rel(apigw, api3, "lb", "HTTP")
+
+Rel(api1, redis, "read/write", "RESP/TCP")
+Rel(api2, redis, "read/write", "RESP/TCP")
+Rel(api3, redis, "read/write", "RESP/TCP")
+
+Rel(redis, mongos, "cache miss -> query", "MongoDB wire/TCP")
+
+Rel(mongos, cfg1, "metadata", "MongoDB wire/TCP")
+Rel(mongos, cfg2, "metadata", "MongoDB wire/TCP")
+Rel(mongos, cfg3, "metadata", "MongoDB wire/TCP")
+
+Rel(mongos, s11, "queries", "MongoDB wire/TCP")
+Rel(mongos, s21, "queries", "MongoDB wire/TCP")
+
+Rel(s11, s12, "repl", "MongoDB replication")
+Rel(s11, s13, "repl", "MongoDB replication")
+Rel(s21, s22, "repl", "MongoDB replication")
+Rel(s21, s23, "repl", "MongoDB replication")
+
+@enduml
