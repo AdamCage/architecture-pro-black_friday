@@ -5,21 +5,18 @@ services:
   # Config Server Replica Set (3)
   # ------------------------------
   configSrv1:
-    container_name: configSrv1
     image: dh-mirror.gitverse.ru/mongo:latest
     command: ["mongod", "--configsvr", "--replSet", "configReplSet", "--port", "27019", "--bind_ip_all"]
     volumes:
       - configSrv1_data:/data/db
 
   configSrv2:
-    container_name: configSrv2
     image: dh-mirror.gitverse.ru/mongo:latest
     command: ["mongod", "--configsvr", "--replSet", "configReplSet", "--port", "27019", "--bind_ip_all"]
     volumes:
       - configSrv2_data:/data/db
 
   configSrv3:
-    container_name: configSrv3
     image: dh-mirror.gitverse.ru/mongo:latest
     command: ["mongod", "--configsvr", "--replSet", "configReplSet", "--port", "27019", "--bind_ip_all"]
     volumes:
@@ -29,21 +26,18 @@ services:
   # Shard 1 Replica Set (3)
   # ------------------------------
   shard1-1:
-    container_name: shard1-1
     image: dh-mirror.gitverse.ru/mongo:latest
     command: ["mongod", "--shardsvr", "--replSet", "shard1RS", "--port", "27018", "--bind_ip_all"]
     volumes:
       - shard1_1_data:/data/db
 
   shard1-2:
-    container_name: shard1-2
     image: dh-mirror.gitverse.ru/mongo:latest
     command: ["mongod", "--shardsvr", "--replSet", "shard1RS", "--port", "27018", "--bind_ip_all"]
     volumes:
       - shard1_2_data:/data/db
 
   shard1-3:
-    container_name: shard1-3
     image: dh-mirror.gitverse.ru/mongo:latest
     command: ["mongod", "--shardsvr", "--replSet", "shard1RS", "--port", "27018", "--bind_ip_all"]
     volumes:
@@ -53,21 +47,18 @@ services:
   # Shard 2 Replica Set (3)
   # ------------------------------
   shard2-1:
-    container_name: shard2-1
     image: dh-mirror.gitverse.ru/mongo:latest
     command: ["mongod", "--shardsvr", "--replSet", "shard2RS", "--port", "27018", "--bind_ip_all"]
     volumes:
       - shard2_1_data:/data/db
 
   shard2-2:
-    container_name: shard2-2
     image: dh-mirror.gitverse.ru/mongo:latest
     command: ["mongod", "--shardsvr", "--replSet", "shard2RS", "--port", "27018", "--bind_ip_all"]
     volumes:
       - shard2_2_data:/data/db
 
   shard2-3:
-    container_name: shard2-3
     image: dh-mirror.gitverse.ru/mongo:latest
     command: ["mongod", "--shardsvr", "--replSet", "shard2RS", "--port", "27018", "--bind_ip_all"]
     volumes:
@@ -77,7 +68,6 @@ services:
   # mongos router
   # ------------------------------
   mongos:
-    container_name: mongos
     image: dh-mirror.gitverse.ru/mongo:latest
     depends_on:
       - configSrv1
@@ -89,12 +79,22 @@ services:
       - shard2-1
       - shard2-2
       - shard2-3
-    command: ["mongos", "--configdb", "configReplSet/configSrv1:27019,configSrv2:27019,configSrv3:27019", "--port", "27017", "--bind_ip_all"]
+    command:
+      [
+        "mongos",
+        "--configdb",
+        "configReplSet/configSrv1:27019,configSrv2:27019,configSrv3:27019",
+        "--port",
+        "27017",
+        "--bind_ip_all"
+      ]
     ports:
       - "27017:27017"
 
+  # ------------------------------
+  # Application
+  # ------------------------------
   pymongo_api:
-    container_name: pymongo_api
     image: kazhem/pymongo_api:1.0.0
     depends_on:
       - mongos

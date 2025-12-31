@@ -1,114 +1,133 @@
 #!/bin/bash
 set -euo pipefail
 
-# This script:
-# 1) initiates replica sets (configReplSet, shard1RS, shard2RS)
-# 2) (re)starts mongos
-# 3) adds shards to the cluster and enables sharding for somedb.helloDoc
+wait_ping() {
+  local svc="$1"
+  local port="$2"
+  local tries="${3:-120}"
 
-init_rs_if_needed() {
-  local service="$1" port="$2" js="$3"
-  docker compose exec -T "$service" mongosh --port "$port" --quiet <<EOF
-try {
-  rs.status();
-  // already initiated
-} catch (e) {
-  $js
-}
-EOF
-}
-
-wait_primary() {
-  local service="$1" port="$2" label="$3"
-  echo "Waiting for primary: $label ..."
-  for i in $(seq 1 60); do
-    out=$(docker compose exec -T "$service" mongosh --port "$port" --quiet <<'EOF' 2>/dev/null || true
-try {
-  var r = db.adminCommand({hello: 1});
-  print(r.isWritablePrimary === true);
-} catch (e) {
-  print(false);
-}
-EOF
-)
-    if echo "$out" | tail -n 1 | grep -q "true"; then
-      echo "Primary is ready: $label"
+  for _ in $(seq 1 "$tries"); do
+    if docker compose exec -T "$svc" mongosh --port "$port" --quiet --eval 'db.adminCommand({ ping: 1 }).ok' 2>/dev/null | grep -q "1"; then
       return 0
     fi
     sleep 1
   done
-  echo "ERROR: primary not elected in time: $label" >&2
+  echo "Timeout waiting for $svc:$port"
+  docker compose ps
   exit 1
 }
 
-# 1) Config RS
-init_rs_if_needed "configSrv1" 27019 '
-rs.initiate({
-  _id: "configReplSet",
-  configsvr: true,
-  members: [
-    { _id: 0, host: "configSrv1:27019", priority: 2 },
-    { _id: 1, host: "configSrv2:27019", priority: 1 },
-    { _id: 2, host: "configSrv3:27019", priority: 1 }
-  ]
-})'
+wait_primary_rs() {
+  local exec_svc="$1"
+  local uri="$2"
+  local tries="${3:-120}"
 
-wait_primary "configSrv1" 27019 "configReplSet"
+  for _ in $(seq 1 "$tries"); do
+    if docker compose exec -T "$exec_svc" mongosh "$uri" --quiet --eval 'db.adminCommand({ hello: 1 }).isWritablePrimary' 2>/dev/null | grep -q "true"; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Timeout waiting RS primary: $uri"
+  exit 1
+}
 
-# 2) Shard RS #1
-init_rs_if_needed "shard1-1" 27018 '
-rs.initiate({
-  _id: "shard1RS",
-  members: [
-    { _id: 0, host: "shard1-1:27018", priority: 2 },
-    { _id: 1, host: "shard1-2:27018", priority: 1 },
-    { _id: 2, host: "shard1-3:27018", priority: 1 }
-  ]
-})'
+echo "Waiting config servers..."
+wait_ping configSrv1 27019
+wait_ping configSrv2 27019
+wait_ping configSrv3 27019
 
-wait_primary "shard1-1" 27018 "shard1RS"
+echo "Waiting shards..."
+wait_ping shard1-1 27018
+wait_ping shard1-2 27018
+wait_ping shard1-3 27018
+wait_ping shard2-1 27018
+wait_ping shard2-2 27018
+wait_ping shard2-3 27018
 
-# 3) Shard RS #2
-init_rs_if_needed "shard2-1" 27018 '
-rs.initiate({
-  _id: "shard2RS",
-  members: [
-    { _id: 0, host: "shard2-1:27018", priority: 2 },
-    { _id: 1, host: "shard2-2:27018", priority: 1 },
-    { _id: 2, host: "shard2-3:27018", priority: 1 }
-  ]
-})'
+echo "Init configReplSet (idempotent)..."
+docker compose exec -T configSrv1 mongosh --port 27019 --quiet <<'EOF'
+let initiated = false;
+try { initiated = (rs.status().ok === 1); } catch(e) { initiated = false; }
 
-wait_primary "shard2-1" 27018 "shard2RS"
+if (!initiated) {
+  rs.initiate({
+    _id: "configReplSet",
+    configsvr: true,
+    members: [
+      { _id: 0, host: "configSrv1:27019", priority: 2 },
+      { _id: 1, host: "configSrv2:27019", priority: 1 },
+      { _id: 2, host: "configSrv3:27019", priority: 1 }
+    ]
+  });
+}
+EOF
 
-# 4) Restart mongos so it reliably picks up the initiated config RS
-# (Safe even if it already works.)
+wait_primary_rs configSrv1 "mongodb://configSrv1:27019,configSrv2:27019,configSrv3:27019/?replicaSet=configReplSet"
+
+echo "Init shard1RS (idempotent)..."
+docker compose exec -T shard1-1 mongosh --port 27018 --quiet <<'EOF'
+let initiated = false;
+try { initiated = (rs.status().ok === 1); } catch(e) { initiated = false; }
+
+if (!initiated) {
+  rs.initiate({
+    _id: "shard1RS",
+    members: [
+      { _id: 0, host: "shard1-1:27018", priority: 2 },
+      { _id: 1, host: "shard1-2:27018", priority: 1 },
+      { _id: 2, host: "shard1-3:27018", priority: 1 }
+    ]
+  });
+}
+EOF
+
+wait_primary_rs shard1-1 "mongodb://shard1-1:27018,shard1-2:27018,shard1-3:27018/?replicaSet=shard1RS"
+
+echo "Init shard2RS (idempotent)..."
+docker compose exec -T shard2-1 mongosh --port 27018 --quiet <<'EOF'
+let initiated = false;
+try { initiated = (rs.status().ok === 1); } catch(e) { initiated = false; }
+
+if (!initiated) {
+  rs.initiate({
+    _id: "shard2RS",
+    members: [
+      { _id: 0, host: "shard2-1:27018", priority: 2 },
+      { _id: 1, host: "shard2-2:27018", priority: 1 },
+      { _id: 2, host: "shard2-3:27018", priority: 1 }
+    ]
+  });
+}
+EOF
+
+wait_primary_rs shard2-1 "mongodb://shard2-1:27018,shard2-2:27018,shard2-3:27018/?replicaSet=shard2RS"
+
+echo "Restart mongos (after configRS init) and wait it..."
 docker compose restart mongos >/dev/null
+wait_ping mongos 27017
 
-# 5) Add shards + shard collection (range-based by age for deterministic distribution)
+echo "Add shards + enable sharding + pre-split/move chunk..."
 docker compose exec -T mongos mongosh --port 27017 --quiet <<'EOF'
-function shardExists(id) {
-  const res = db.adminCommand({listShards: 1});
-  return (res.shards || []).some(s => s._id === id);
+function addShardIfMissing(id, connString) {
+  const shards = (db.adminCommand({ listShards: 1 }).shards || []);
+  if (!shards.find(s => s._id === id)) {
+    db.adminCommand({ addShard: connString, name: id });
+  }
 }
 
-if (!shardExists("shard1RS")) {
-  sh.addShard("shard1RS/shard1-1:27018,shard1-2:27018,shard1-3:27018");
-}
-if (!shardExists("shard2RS")) {
-  sh.addShard("shard2RS/shard2-1:27018,shard2-2:27018,shard2-3:27018");
-}
+addShardIfMissing("shard1", "shard1RS/shard1-1:27018,shard1-2:27018,shard1-3:27018");
+addShardIfMissing("shard2", "shard2RS/shard2-1:27018,shard2-2:27018,shard2-3:27018");
 
-try { sh.enableSharding("somedb"); } catch (e) { }
+try { sh.enableSharding("somedb"); } catch(e) {}
 
-use somedb
+const somedb = db.getSiblingDB("somedb");
+try { somedb.helloDoc.createIndex({ age: 1 }); } catch(e) {}
+try { sh.shardCollection("somedb.helloDoc", { age: 1 }); } catch(e) {}
 
-db.helloDoc.createIndex({ age: 1 })
-try { sh.shardCollection("somedb.helloDoc", { age: 1 }); } catch (e) { }
-
-// Pre-split and move one chunk so reviewer sees both shards used deterministically
-try { sh.splitAt("somedb.helloDoc", { age: 500 }); } catch (e) { }
-try { sh.moveChunk("somedb.helloDoc", { age: 500 }, "shard2RS"); } catch (e) { }
+// Детерминированное распределение: <500 -> shard1, >=500 -> shard2
+try { sh.splitAt("somedb.helloDoc", { age: 500 }); } catch(e) {}
+try { sh.moveChunk("somedb.helloDoc", { age: 500 }, "shard2"); } catch(e) {}
 EOF
 
 echo "OK: replica sets + sharding initialized"

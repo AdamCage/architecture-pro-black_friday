@@ -1,6 +1,29 @@
-# Задание 2 — MongoDB шардирование (2 шарда)
+# Задание 2 — MongoDB Sharding (2 шарда)
 
-## Запуск
+Цель: поднять стенд с **MongoDB sharding** на **2 шарда**, чтобы приложение показывало:
+- общее количество документов в базе `somedb.helloDoc` (≥ 1000),
+- количество документов **в каждом шарде**.
+
+> Важно: современные версии MongoDB **не позволяют запускать `mongod --shardsvr` как standalone**. Поэтому каждый шард запущен как **replica set из 1 ноды** (`shard1RS`, `shard2RS`). Это не “репликация из задания 3”, а техническое требование MongoDB для shard-серверов.
+
+---
+
+## Состав стенда
+
+- `pymongo_api` — приложение `kazhem/pymongo_api:1.0.0`
+- `mongos` — роутер MongoDB
+- `configSrv` — config server (replica set из 1 ноды)
+- `shard1` — `shard1RS` (1 нода)
+- `shard2` — `shard2RS` (1 нода)
+
+### Порты по умолчанию
+- `mongos`: `27017`
+- `configSrv` (configsvr): `27019`
+- `shard1/shard2` (shardsvr): `27018`
+
+---
+
+## Быстрый запуск (рекомендуется)
 
 Из директории `mongo-sharding`:
 
@@ -8,108 +31,37 @@
 docker compose up -d
 ```
 
-## Инициализация шардирования
-
-### Вариант А: одной командой (скрипт)
+Инициализация шардирования:
 
 ```bash
 ./scripts/init-sharding.sh
 ```
 
-Скрипт:
-- инициализирует config server replica set `configReplSet`;
-- добавляет 2 шарда (`shard1`, `shard2`);
-- включает шардирование для БД `somedb`;
-- шардирует коллекцию `somedb.helloDoc` по ключу `{ age: 1 }` и заранее делит диапазон:
-  - `age: 0..499` -> `shard1`
-  - `age: 500..999` -> `shard2`
-
-### Вариант Б: вручную через `mongosh` (как в задании)
-
-1) Инициализировать config server:
-
-```bash
-docker compose exec -T configSrv mongosh --port 27019 --quiet <<'EOF'
-rs.initiate({
-  _id: "configReplSet",
-  configsvr: true,
-  members: [{ _id: 0, host: "configSrv:27019" }]
-})
-EOF
-```
-
-2) Добавить шарды и настроить шардирование:
-
-```bash
-docker compose exec -T mongos mongosh --port 27017 --quiet <<'EOF'
-sh.addShard("shard1:27018")
-sh.addShard("shard2:27018")
-
-sh.enableSharding("somedb")
-
-use somedb
-
-db.helloDoc.createIndex({ age: 1 })
-sh.shardCollection("somedb.helloDoc", { age: 1 })
-
-sh.splitAt("somedb.helloDoc", { age: 500 })
-sh.moveChunk("somedb.helloDoc", { age: 500 }, "shard2")
-EOF
-```
-
-## Заполнение данными
+Наполнение базы `somedb`, коллекции `helloDoc` (1000 документов):
 
 ```bash
 ./scripts/mongo-init.sh
 ```
 
-(Заполняет `somedb.helloDoc` 1000 документами.)
-
-## Проверка
-
-### 1) Приложение
-
-Откройте в браузере:
-- http://localhost:8080
-
-### 2) Количество документов (общее и по шардам)
-
-Удобный вариант:
+Проверка общего числа документов и распределения по шардам:
 
 ```bash
 ./scripts/check-counts.sh
 ```
 
-Либо вручную:
+Ожидаемый результат:
 
-**Общее количество через `mongos`:**
+* Total docs via mongos: **1000**
+* Docs on shard1: **500**
+* Docs on shard2: **500**
+* `sh.status()` показывает **2 chunks** и распределение примерно **50/50**.
 
-```bash
-docker compose exec -T mongos mongosh --port 27017 --quiet <<'EOF'
-use somedb
-print(db.helloDoc.countDocuments())
-EOF
-```
+---
 
-**Количество документов на каждом шарде (прямое подключение):**
+## Проверка приложения
 
-```bash
-docker compose exec -T shard1 mongosh --port 27018 --quiet <<'EOF'
-use somedb
-print(db.helloDoc.countDocuments())
-EOF
+Приложение доступно на:
 
-docker compose exec -T shard2 mongosh --port 27018 --quiet <<'EOF'
-use somedb
-print(db.helloDoc.countDocuments())
-EOF
-```
+* `http://localhost:8080`
 
-**Распределение по шардам:**
-
-```bash
-docker compose exec -T mongos mongosh --port 27017 --quiet <<'EOF'
-use somedb
-db.helloDoc.getShardDistribution()
-EOF
-```
+Оно должно отдавать JSON со статусом MongoDB и метриками.
