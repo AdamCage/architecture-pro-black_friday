@@ -1,0 +1,77 @@
+@startuml
+' Variant 4: Sharding + Replication + Redis cache + API Gateway + Consul (Service Discovery)
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_LEFT_RIGHT()
+SHOW_LEGEND()
+
+title "Mobile World — Variant 4 (Scale-out + API Gateway + Consul)"
+
+Person(user, "User", "Browser / Mobile app")
+
+System_Boundary(sys, "Mobile World backend") {
+
+  Container(apigw, "API Gateway", "Nginx/Traefik", "Routes API traffic, load-balances across app instances")
+  Container(consul, "Consul (Service Discovery)", "Consul", "Service registry and discovery for app instances")
+
+  Container(api1, "pymongo-api-1", "kazhem/pymongo_api:1.0.0", "Application instance")
+  Container(api2, "pymongo-api-2", "kazhem/pymongo_api:1.0.0", "Application instance")
+  Container(api3, "pymongo-api-3", "kazhem/pymongo_api:1.0.0", "Application instance")
+
+  ContainerDb(redis, "redis", "Redis", "Caches /<collection>/users responses")
+
+  Container_Boundary(mongo, "MongoDB sharded cluster") {
+    Container(mongos, "mongos", "MongoDB mongos", "Query router")
+
+    Container_Boundary(configrs, "ReplicaSet: configReplSet") {
+      ContainerDb(cfg1, "configSrv1", "MongoDB configsvr", "Cluster metadata")
+      ContainerDb(cfg2, "configSrv2", "MongoDB configsvr", "Cluster metadata")
+      ContainerDb(cfg3, "configSrv3", "MongoDB configsvr", "Cluster metadata")
+    }
+
+    Container_Boundary(shard1rs, "ReplicaSet: shard1RS") {
+      ContainerDb(s11, "shard1-1 (P)", "MongoDB shardsvr", "Primary")
+      ContainerDb(s12, "shard1-2 (S)", "MongoDB shardsvr", "Secondary")
+      ContainerDb(s13, "shard1-3 (S)", "MongoDB shardsvr", "Secondary")
+    }
+
+    Container_Boundary(shard2rs, "ReplicaSet: shard2RS") {
+      ContainerDb(s21, "shard2-1 (P)", "MongoDB shardsvr", "Primary")
+      ContainerDb(s22, "shard2-2 (S)", "MongoDB shardsvr", "Secondary")
+      ContainerDb(s23, "shard2-3 (S)", "MongoDB shardsvr", "Secondary")
+    }
+  }
+}
+
+Rel(user, apigw, "API requests", "HTTPS")
+
+Rel(apigw, consul, "discover app instances", "HTTP")
+Rel(api1, consul, "register/health", "HTTP")
+Rel(api2, consul, "register/health", "HTTP")
+Rel(api3, consul, "register/health", "HTTP")
+
+Rel(apigw, api1, "route/LB", "HTTP")
+Rel(apigw, api2, "route/LB", "HTTP")
+Rel(apigw, api3, "route/LB", "HTTP")
+
+Rel(api1, redis, "cache get/set", "RESP/TCP")
+Rel(api2, redis, "cache get/set", "RESP/TCP")
+Rel(api3, redis, "cache get/set", "RESP/TCP")
+
+Rel(api1, mongos, "DB queries (cache miss)", "MongoDB wire/TCP")
+Rel(api2, mongos, "DB queries (cache miss)", "MongoDB wire/TCP")
+Rel(api3, mongos, "DB queries (cache miss)", "MongoDB wire/TCP")
+
+Rel(mongos, cfg1, "metadata", "MongoDB wire/TCP")
+Rel(mongos, cfg2, "metadata", "MongoDB wire/TCP")
+Rel(mongos, cfg3, "metadata", "MongoDB wire/TCP")
+
+Rel(mongos, s11, "queries (shard1RS)", "MongoDB wire/TCP")
+Rel(mongos, s21, "queries (shard2RS)", "MongoDB wire/TCP")
+
+Rel(s11, s12, "replication", "MongoDB repl")
+Rel(s11, s13, "replication", "MongoDB repl")
+Rel(s21, s22, "replication", "MongoDB repl")
+Rel(s21, s23, "replication", "MongoDB repl")
+
+@enduml
