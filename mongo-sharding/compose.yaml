@@ -11,14 +11,14 @@ services:
   shard1:
     container_name: shard1
     image: dh-mirror.gitverse.ru/mongo:latest
-    command: ["mongod", "--shardsvr", "--port", "27018", "--bind_ip_all"]
+    command: ["mongod", "--shardsvr", "--replSet", "shard1RS", "--port", "27018", "--bind_ip_all"]
     volumes:
       - shard1_data:/data/db
 
   shard2:
     container_name: shard2
     image: dh-mirror.gitverse.ru/mongo:latest
-    command: ["mongod", "--shardsvr", "--port", "27018", "--bind_ip_all"]
+    command: ["mongod", "--shardsvr", "--replSet", "shard2RS", "--port", "27018", "--bind_ip_all"]
     volumes:
       - shard2_data:/data/db
 
